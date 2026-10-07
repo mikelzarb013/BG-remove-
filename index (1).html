@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Background remover</title>
+<style>
+:root{--bg:#eef0ec;--ink:#1c2321;--mute:#5a6762;--line:#c6cdc8;--card:#fff;--acc:#0f6b63;--on:#fff;--c1:#dde2de;--c2:#f3f5f2}
+@media(prefers-color-scheme:dark){:root{--bg:#141a18;--ink:#e8eeea;--mute:#9aa8a2;--line:#2d3935;--card:#1d2523;--acc:#4fc3b5;--on:#08201c;--c1:#2a3330;--c2:#222a28}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font:16px/1.5 "Avenir Next","Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column}
+header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid var(--line)}
+header b{font-size:18px;letter-spacing:-.01em}
+.note{color:var(--mute);font-size:14px;margin-right:auto}
+main{flex:1;display:flex;flex-direction:column;align-items:center;padding:20px 16px;gap:16px}
+button,select,input[type=color]{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 14px;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+button.pri{background:var(--acc);color:var(--on);border-color:var(--acc);font-weight:600}
+button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.drop{width:min(720px,100%);margin:6vh 0;padding:56px 24px;border:2px dashed var(--line);border-radius:18px;text-align:center;cursor:pointer;background:var(--card)}
+.drop.over{border-color:var(--acc)}
+.drop h1{margin:0 0 8px;font-size:30px;letter-spacing:-.02em}
+.drop p{margin:0 auto;max-width:46ch;color:var(--mute)}
+#editor{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%}
+#editor[hidden],[hidden]{display:none!important}
+#stage{position:relative;line-height:0;border-radius:6px;overflow:hidden;background:conic-gradient(var(--c1) 25%,var(--c2) 0 50%,var(--c1) 0 75%,var(--c2) 0) 0 0/20px 20px;box-shadow:0 0 0 1px var(--line)}
+#stage canvas{display:block;touch-action:none;cursor:crosshair}
+#cori{position:absolute;left:0;top:0;width:100%!important;height:100%!important;pointer-events:none;clip-path:inset(0 100% 0 0)}
+.bar{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:center;max-width:900px}
+.grp{display:flex;gap:6px;align-items:center}
+label.s{display:flex;gap:8px;align-items:center;color:var(--mute);font-size:14px}
+input[type=range]{accent-color:var(--acc);width:120px}
+#msg{min-height:1.5em;margin:0;white-space:pre-line;color:var(--mute);text-align:center;padding:0 16px 18px}
+dialog{max-width:min(520px,92vw);border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);padding:24px}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog h2{margin:0 0 8px;font-size:20px}
+dialog h3{margin:16px 0 4px;font-size:15px}
+dialog p,dialog li{font-size:15px;color:var(--mute);margin:4px 0}
+dialog a{color:var(--acc)}
+progress{width:100%;height:12px;accent-color:var(--acc)}
+.row{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+</style>
+</head>
+<body>
+<header>
+  <b>Background remover</b>
+  <span class="note">Nothing leaves your device.</span>
+  <button id="about">About &amp; licenses</button>
+</header>
+
+<main>
+  <label id="drop" class="drop" tabindex="0">
+    <input id="file" type="file" accept="image/*" hidden>
+    <h1>Drop a photo here</h1>
+    <p>Or paste an image, or choose a file. The cutout is made on your device and saved at full resolution.</p>
+  </label>
+
+  <section id="editor" hidden>
+    <div id="stage"><canvas id="cres"></canvas><canvas id="cori"></canvas></div>
+    <div class="bar">
+      <div class="grp">
+        <button data-tool="restore" aria-pressed="true">Restore</button>
+        <button data-tool="erase" aria-pressed="false">Erase</button>
+      </div>
+      <label class="s">Brush <input id="size" type="range" min="6" max="160" value="44"></label>
+      <div class="grp">
+        <button id="undo" disabled>Undo</button>
+        <button id="redo" disabled>Redo</button>
+      </div>
+      <label class="s">Original <input id="cmp" type="range" min="0" max="100" value="0"></label>
+    </div>
+    <div class="bar">
+      <select id="fmt" aria-label="Format">
+        <option value="png">PNG (transparent)</option>
+        <option value="webp">WebP (transparent)</option>
+        <option value="jpg">JPG (with background)</option>
+      </select>
+      <label class="s" id="bgw" hidden>Background <input id="bg" type="color" value="#ffffff"></label>
+      <button id="save" class="pri" disabled>Download</button>
+      <button id="again">New image</button>
+    </div>
+  </section>
+</main>
+<p id="msg" role="status" aria-live="polite"></p>
+
+<dialog id="dl">
+  <h2>One-time model download</h2>
+  <p>Removing backgrounds needs an AI model of <b id="size-txt"></b>. It downloads once, then stays on this device. How long it takes depends on your connection speed.</p>
+  <div id="prog" hidden><progress id="bar" max="100" value="0"></progress><p id="ptxt">Starting…</p></div>
+  <div class="row"><button id="no">Cancel</button><button id="go" class="pri">Download and continue</button></div>
+</dialog>
+
+<dialog id="abt">
+  <h2>About, privacy &amp; licenses</h2>
+  <h3>Privacy</h3>
+  <p>Your photos are never uploaded. Everything runs in your browser. Only the code library and the model files are downloaded, from jsDelivr and Hugging Face.</p>
+  <h3>Credits</h3>
+  <ul>
+    <li>Cutout model: BiRefNet by Peng Zheng et al. (MIT license), in the ONNX build by the onnx-community on Hugging Face.</li>
+    <li>Transformers.js by Hugging Face (Apache 2.0).</li>
+    <li>ONNX Runtime Web by Microsoft (MIT).</li>
+  </ul>
+  <h3>Terms</h3>
+  <p>Provided as is, with no warranty. You are responsible for the images you process.</p>
+  <div class="row"><button id="abt-x" class="pri">Close</button></div>
+</dialog>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const ID = 'onnx-community/BiRefNet_lite-ONNX';
+const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
+$('size-txt').textContent = 'about 115 to 224 MB';
+const fmt = e => typeof e === 'number' ? `runtime error code ${e} (a low-level crash, often a memory limit)` : (e && e.message) || String(e);
+async function getModes() {
+  const m = []; let ad = null;
+  try { ad = await navigator.gpu?.requestAdapter(); } catch {}
+  if (ad) {
+    if (ad.features && ad.features.has('shader-f16')) m.push({ device: 'webgpu', dtype: 'fp16', mb: 115 });
+    m.push({ device: 'webgpu', dtype: 'fp32', mb: 224 });
+  }
+  m.push({ device: 'wasm', dtype: 'fp32', mb: 224 });
+  return m;
+}
+
+let T, model, proc, cur = null, W, H, alpha, resImg, us = [], rs = [];
+let tool = 'restore', busy = false, name = 'image', pend = null, downloading = false, last = null;
+const cres = $('cres'), cori = $('cori');
+const rctx = cres.getContext('2d'), octx = cori.getContext('2d');
+const msg = t => { $('msg').textContent = t; };
+
+/* ---------- model loading ---------- */
+const files = {};
+function onProg(p) {
+  if (p.status !== 'progress' || !p.total) return;
+  files[p.file] = [p.loaded, p.total];
+  let l = 0, t = 0;
+  for (const k in files) { l += files[k][0]; t += files[k][1]; }
+  const pct = Math.round(l / t * 100);
+  $('bar').value = pct;
+  const s = `Downloaded ${(l / 1e6).toFixed(0)} of ${(t / 1e6).toFixed(0)} MB (${pct}%)`;
+  $('ptxt').textContent = s; msg(s);
+}
+async function ensureLib() {
+  if (T) return;
+  T = await import(LIB);
+  T.env.allowLocalModels = false;
+  T.env.useBrowserCache = window.isSecureContext && 'caches' in window;
+}
+async function useMode(o) {
+  if (cur && cur.device === o.device && cur.dtype === o.dtype) return;
+  try { await model?.dispose?.(); } catch {}
+  model = null; cur = null;
+  model = await T.AutoModel.from_pretrained(ID, { device: o.device, dtype: o.dtype, progress_callback: onProg });
+  proc ??= await T.AutoProcessor.from_pretrained(ID);
+  cur = o;
+  try { localStorage.setItem('ready', '1'); } catch {}
+}
+async function infer(raw) {
+  const { pixel_values } = await proc(raw);
+  const { output_image } = await model({ input_image: pixel_values });
+  return await T.RawImage.fromTensor(output_image[0].sigmoid().mul(255).to('uint8')).resize(W, H);
+}
+function askDownload() {
+  return new Promise(r => { pend = r; $('dl').showModal(); });
+}
+$('go').onclick = () => { downloading = true; $('go').disabled = true; $('no').disabled = true; $('prog').hidden = false; pend?.(true); pend = null; };
+$('no').onclick = () => $('dl').close();
+$('dl').addEventListener('close', () => { pend?.(false); pend = null; });
+$('dl').addEventListener('cancel', e => { if (downloading) e.preventDefault(); });
+
+/* ---------- image loading & cutout ---------- */
+async function openImage(blob, label) {
+  if (busy) return;
+  let src;
+  try {
+    const bmp = await createImageBitmap(blob);
+    W = bmp.width; H = bmp.height;
+    name = (label || 'image').replace(/\.[^.]+$/, '') || 'image';
+    cori.width = cres.width = W; cori.height = cres.height = H;
+    octx.drawImage(bmp, 0, 0); bmp.close?.();
+    src = octx.getImageData(0, 0, W, H);
+    resImg = new ImageData(new Uint8ClampedArray(src.data), W, H);
+    alpha = new Uint8ClampedArray(W * H).fill(255);
+  } catch (e) { console.error(e); msg('Could not open that file. Try a JPG, PNG, or WebP image.'); return; }
+  us = []; rs = []; $('cmp').value = 0; cori.style.clipPath = 'inset(0 100% 0 0)';
+  $('drop').hidden = true; $('editor').hidden = false;
+  fit(); applyAlpha(0, 0, W, H); sync();
+  await cutout(src);
+}
+async function cutout(src) {
+  busy = true; sync();
+  const log = [];
+  try {
+    await ensureLib();
+    let list = await getModes();
+    if (cur) list = [cur, ...list.filter(x => x.device !== cur.device || x.dtype !== cur.dtype)];
+    if (!model) {
+      $('size-txt').textContent = `about ${list[0].mb} MB`;
+      let ready = false; try { ready = localStorage.getItem('ready') === '1'; } catch {}
+      if (!ready && !await askDownload()) { reset(); return; }
+    }
+    const raw = new T.RawImage(new Uint8ClampedArray(src.data), W, H, 4);
+    let m = null;
+    for (const o of list) {
+      const tag = `${o.device}/${o.dtype}`;
+      try {
+        msg(`Loading the cutout model (${tag})…`);
+        await useMode(o);
+        msg('Removing the background…');
+        await new Promise(r => setTimeout(r, 40));
+        m = await infer(raw);
+        break;
+      } catch (e) { console.error(tag, e); log.push(`${tag}: ${fmt(e)}`); }
+    }
+    if (!m) throw new Error('every mode failed');
+    const s = m.channels || 1;
+    for (let i = 0; i < W * H; i++) alpha[i] = m.data[i * s];
+    applyAlpha(0, 0, W, H);
+    msg('Done. Use Restore or Erase to fix any edges, then download.');
+  } catch (e) {
+    console.error(e);
+    msg(log.length ? 'The cutout failed on this device. What was tried:\n' + log.join('\n') : 'The cutout failed: ' + fmt(e));
+    reset(true);
+  } finally {
+    downloading = false; $('dl').open && $('dl').close();
+    $('go').disabled = false; $('no').disabled = false; $('prog').hidden = true;
+    busy = false; sync();
+  }
+}
+function reset(keepMsg) {
+  alpha = null; $('editor').hidden = true; $('drop').hidden = false;
+  $('go').disabled = false; $('no').disabled = false; $('prog').hidden = true;
+  if (!keepMsg) msg('');
+}
+
+/* ---------- drawing ---------- */
+function fit() {
+  if (!W) return;
+  const s = Math.min((Math.min(innerWidth, 1100) - 32) / W, innerHeight * 0.6 / H, 1);
+  cres.style.width = Math.round(W * s) + 'px'; cres.style.height = Math.round(H * s) + 'px';
+}
+addEventListener('resize', fit);
+function applyAlpha(x, y, w, h) {
+  const d = resImg.data;
+  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) d[(j * W + i) * 4 + 3] = alpha[j * W + i];
+  rctx.putImageData(resImg, 0, 0, x, y, w, h);
+}
+function pos(e) {
+  const r = cres.getBoundingClientRect(), k = W / r.width;
+  return [(e.clientX - r.left) * k, (e.clientY - r.top) * (H / r.height), k];
+}
+function dab(a, b) {
+  const R = $('size').value / 2 * a[2], dist = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const n = Math.ceil(dist / Math.max(1, R / 3)) + 1;
+  let X0 = W, Y0 = H, X1 = 0, Y1 = 0;
+  for (let k = 0; k < n; k++) {
+    const t = n === 1 ? 1 : k / (n - 1), x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+    const x0 = Math.max(0, Math.floor(x - R)), x1 = Math.min(W - 1, Math.ceil(x + R));
+    const y0 = Math.max(0, Math.floor(y - R)), y1 = Math.min(H - 1, Math.ceil(y + R));
+    for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++) {
+      const d = Math.hypot(i - x, j - y); if (d > R) continue;
+      const f = Math.min(1, (R - d) / (R * 0.3)), p = j * W + i;
+      alpha[p] = tool === 'restore' ? Math.max(alpha[p], 255 * f) : Math.min(alpha[p], 255 - 255 * f);
+    }
+    X0 = Math.min(X0, x0); Y0 = Math.min(Y0, y0); X1 = Math.max(X1, x1); Y1 = Math.max(Y1, y1);
+  }
+  if (X1 >= X0 && Y1 >= Y0) applyAlpha(X0, Y0, X1 - X0 + 1, Y1 - Y0 + 1);
+}
+cres.addEventListener('pointerdown', e => {
+  if (busy || !alpha) return;
+  cres.setPointerCapture(e.pointerId);
+  us.push(alpha.slice()); if (us.length > 20) us.shift(); rs = []; sync();
+  last = pos(e); dab(last, last);
+});
+cres.addEventListener('pointermove', e => { if (!last) return; const p = pos(e); dab(last, p); last = p; });
+for (const t of ['pointerup', 'pointercancel']) cres.addEventListener(t, () => { last = null; });
+
+/* ---------- controls ---------- */
+function undoStep() { if (busy || !us.length) return; rs.push(alpha); alpha = us.pop(); applyAlpha(0, 0, W, H); sync(); }
+function redoStep() { if (busy || !rs.length) return; us.push(alpha); alpha = rs.pop(); applyAlpha(0, 0, W, H); sync(); }
+function sync() {
+  $('undo').disabled = busy || !us.length; $('redo').disabled = busy || !rs.length;
+  $('save').disabled = busy || !alpha;
+}
+$('undo').onclick = undoStep; $('redo').onclick = redoStep;
+addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && alpha) { e.preventDefault(); e.shiftKey ? redoStep() : undoStep(); }
+});
+document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => {
+  tool = b.dataset.tool;
+  document.querySelectorAll('[data-tool]').forEach(x => x.setAttribute('aria-pressed', x === b));
+});
+$('cmp').oninput = e => { cori.style.clipPath = `inset(0 ${100 - e.target.value}% 0 0)`; };
+$('fmt').onchange = e => { $('bgw').hidden = e.target.value !== 'jpg'; };
+$('again').onclick = () => reset();
+$('save').onclick = () => {
+  const f = $('fmt').value, type = { png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg' }[f];
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  if (f === 'jpg') { x.fillStyle = $('bg').value; x.fillRect(0, 0, W, H); }
+  x.drawImage(cres, 0, 0);
+  c.toBlob(b => {
+    if (!b) { msg('This image is too large for your browser to export. Try a smaller one.'); return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b); a.download = `${name}-cutout.${f}`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, type, f === 'webp' ? 1 : 0.95);
+};
+$('about').onclick = () => $('abt').showModal();
+$('abt-x').onclick = () => $('abt').close();
+
+/* ---------- input: picker, drop, paste ---------- */
+$('file').onchange = e => { const f = e.target.files[0]; if (f) openImage(f, f.name); e.target.value = ''; };
+$('drop').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+addEventListener('dragover', e => { e.preventDefault(); $('drop').classList.add('over'); });
+addEventListener('dragleave', () => $('drop').classList.remove('over'));
+addEventListener('drop', e => {
+  e.preventDefault(); $('drop').classList.remove('over');
+  const f = [...e.dataTransfer.files].find(x => x.type.startsWith('image/'));
+  if (f) openImage(f, f.name); else msg('That is not an image file.');
+});
+addEventListener('paste', async e => {
+  const it = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+  if (it) { openImage(it.getAsFile(), 'pasted-image'); return; }
+  const t = (e.clipboardData?.getData('text') || '').trim();
+  if (/^https?:\/\//i.test(t)) {
+    try { const r = await fetch(t); openImage(await r.blob(), t.split('/').pop().split('?')[0] || 'image'); }
+    catch { msg('That site does not allow its images to be loaded here. Save the image and drop it in instead.'); }
+  }
+});
+</script>
+</body>
+</html>
